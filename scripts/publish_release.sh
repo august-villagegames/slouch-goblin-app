@@ -55,15 +55,26 @@ dmg_path="$repo_root/dist/Slouch-Goblin-$version-arm64.dmg"
 notes_file="$repo_root/notes/$tag.md"
 
 if [[ ! -f "$notes_file" ]]; then
+  echo "No release notes at notes/$tag.md; using the generic template." >&2
   notes_file="$(mktemp "${TMPDIR:-/tmp}/slouch-goblin-notes.XXXXXX")"
   cat > "$notes_file" <<EOF
 Slouch Goblin $version for Apple Silicon Macs running macOS 13 or later.
 
 Download \`$(basename "$dmg_path")\`, open it, and drag Slouch Goblin to
-Applications. The app is not notarized, so macOS will warn on first launch —
-see [the install instructions](https://github.com/$repo#install) for the two
-ways to get past it.
+Applications, then open it from there. Allow camera access when macOS asks.
+
+This build is signed and notarized by Apple, so it opens without any security
+warning. See [the install instructions](https://github.com/$repo#install) if
+anything is unclear.
 EOF
+fi
+
+# Refuse to publish an unstapled image: it would look correct here and then
+# warn on every machine that downloads it.
+if ! xcrun stapler validate "$dmg_path" >/dev/null 2>&1; then
+  echo "Disk image has no stapled notarization ticket; refusing to publish." >&2
+  echo "Re-run ./scripts/package_dmg.sh without --skip-notarize." >&2
+  exit 1
 fi
 
 echo
@@ -71,6 +82,8 @@ echo "About to publish a PUBLIC release:"
 echo "  repo:  $repo"
 echo "  tag:   $tag"
 echo "  asset: $(basename "$dmg_path") ($(du -h "$dmg_path" | cut -f1))"
+echo "  notes: $notes_file"
+echo "  state: signed, notarized, stapled"
 echo
 
 if [[ "$assume_yes" -ne 1 ]]; then
@@ -78,6 +91,11 @@ if [[ "$assume_yes" -ne 1 ]]; then
   [[ "$reply" == "y" || "$reply" == "Y" ]] || { echo "Aborted."; exit 1; }
 fi
 
+# Deliberately NOT --prerelease. GitHub's /releases/latest endpoint skips
+# pre-releases, and two things depend on it: the README download link, and the
+# app's own update check in update_check.py. Marking a beta as a pre-release
+# makes both 404, so nobody can find the build and nobody is ever told an
+# update exists. Signal beta status with the 0.x version and the title instead.
 gh release create "$tag" \
   --repo "$repo" \
   --title "Slouch Goblin $version" \
