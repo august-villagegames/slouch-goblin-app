@@ -4,8 +4,10 @@ A private, real-time posture reminder for MacBooks. It lives in your menu bar,
 watches for forward lean through the built-in camera, and nudges you when you
 start hunching.
 
-Everything happens on your Mac. No video, image, or posture data ever leaves the
-machine, and the app makes no network requests while it runs.
+Your camera stays on your Mac. No video, image, or posture data ever leaves the
+machine. The app makes exactly one kind of network request — an optional daily
+check for a newer version, which sends nothing about you and can be switched off
+from the menu.
 
 `GOOD` means close to the comfortable upright reference you choose at setup. It
 is not a medical diagnosis, an ergonomic certification, or a claim that one
@@ -29,26 +31,8 @@ posture is universally correct.
 4. Allow camera access when macOS asks. Slouch Goblin cannot detect posture
    without it.
 
-### Getting past the macOS warning
-
-Slouch Goblin is signed, but it is **not notarized by Apple** — notarization
-requires a paid Apple Developer account. macOS therefore blocks it on first
-launch. This is expected, and there are two ways through it.
-
-**Most of the time,** right-click the app in Applications and choose **Open**,
-then click **Open** again in the dialog. If no Open button appears, go to
- > System Settings → Privacy & Security, scroll to the message about Slouch
-Goblin, and click **Open Anyway**.
-
-**If macOS says the app "is damaged and can't be opened,"** that is macOS's
-wording for an app it cannot verify, not a corrupted download. Remove the
-download quarantine flag in Terminal:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/Slouch Goblin.app"
-```
-
-Then open the app normally. You only need to do this once per install.
+Slouch Goblin is signed with an Apple Developer ID and notarized by Apple, so it
+opens normally — no right-clicking, no Terminal commands, no security warnings.
 
 ### Verifying your download
 
@@ -66,9 +50,23 @@ short two-pose calibration: your comfortable upright posture, and the first
 forward lean you want to be nudged about. After that it monitors quietly with
 no window open.
 
-The menu bar item gives you Monitoring, Show Video Feed, Show Diagnostics,
-Re-calibrate, Launch at Login, and Quit. Clicking the Dock icon reopens the
-video feed.
+The menu bar item shows the current status, a contextual action for whatever it
+is doing right now (open the window, pause, resume, retry the camera), and then:
+
+- **Recalibrate…** — redo the two-pose setup
+- **Open at login** — start Slouch Goblin automatically
+- **Check for updates** — turn the daily version check on or off
+- **Diagnostics…** — live detector values, with a button to copy them
+- **About Slouch Goblin** — version and build number
+- **Report an issue** — opens this repository's issue tracker
+- **Quit Slouch Goblin**
+
+Clicking the Dock icon reopens the window.
+
+When you have been hunching for a while, the screen takes on a soft green blur,
+and a goblin turns up in the corner if you keep at it. A **Not hunching** button
+appears alongside the blur so you can flag a wrong alert; the video window has an
+**I'm hunching** button for the opposite case. Both are stored locally only.
 
 If Zoom, Google Meet, QuickTime, or another app takes the camera, Slouch Goblin
 releases it and pauses, then resumes once the camera has been free for two
@@ -77,11 +75,14 @@ seconds. Screen-only recording does not pause it.
 ## Uninstall
 
 Drag `Slouch Goblin.app` from Applications to the Trash. To also remove your
-saved calibration:
+saved calibration and any feedback you flagged:
 
 ```bash
-rm -rf ~/Library/Application\ Support/Posture\ Probe
+rm -rf ~/Library/Application\ Support/Slouch\ Goblin
 ```
+
+If you used a build from before this was renamed, also remove
+`~/Library/Application\ Support/Posture\ Probe`.
 
 ## About this repository
 
@@ -95,9 +96,23 @@ Releases are built and published with:
 ```
 
 `scripts/package_dmg.sh` turns a built app bundle into a versioned disk image:
-it reads the version from the bundle's `Info.plist`, verifies the code
-signature, stages the app alongside an `/Applications` shortcut, builds the
-image, mounts it to confirm the contents, and writes a SHA-256 checksum.
+it reads the version from the bundle's `Info.plist`, refuses anything that is
+not Developer ID signed with the hardened runtime, notarizes and staples the
+app, stages it alongside an `/Applications` shortcut, builds the image,
+notarizes and staples that too, mounts it to confirm the contents, checks
+Gatekeeper accepts it, and writes a SHA-256 checksum.
+
+`scripts/notarize.sh` handles submission and stapling on its own, and documents
+the one-time `xcrun notarytool store-credentials` setup it needs.
+
+Release notes come from `notes/v<version>.md`; see `notes/TEMPLATE.md`.
+
+## License
+
+Slouch Goblin is free to use but not open source — see [LICENSE](LICENSE).
+
+Bundled open source components and their licenses are listed in
+[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
 
 ---
 

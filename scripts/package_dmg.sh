@@ -9,7 +9,19 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 repo_root="$PWD"
 
-app_path="${1:-${SLOUCH_GOBLIN_APP:-../hunch/dist/Slouch Goblin.app}}"
+EXPECTED_TEAM_ID="${SLOUCH_GOBLIN_TEAM_ID:-4VS9K4RWP9}"
+# The disk image needs its own signature, separate from the app inside it.
+SIGN_IDENTITY="${SLOUCH_GOBLIN_SIGN_IDENTITY:-Developer ID Application: August Russell Comstock (4VS9K4RWP9)}"
+
+skip_notarize=0
+app_path=""
+for arg in "$@"; do
+  case "$arg" in
+    --skip-notarize) skip_notarize=1 ;;
+    *) app_path="$arg" ;;
+  esac
+done
+app_path="${app_path:-${SLOUCH_GOBLIN_APP:-../hunch/dist/Slouch Goblin.app}}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "Disk images must be packaged on macOS." >&2
@@ -44,10 +56,39 @@ fi
 # Capture first rather than piping into grep -q: under `set -o pipefail` the
 # early exit of grep -q can SIGPIPE codesign and fail the whole pipeline.
 signature_info="$(codesign --display --verbose=2 "$app_path" 2>&1 || true)"
+
+# An ad-hoc bundle cannot be notarized, and every downloader would be told to
+# run a Terminal command to open it. That is not something to ship by accident,
+# so refuse rather than warn.
 if [[ "$signature_info" == *"Signature=adhoc"* ]]; then
-  echo "Note: ad-hoc signature. Downloaders must clear Gatekeeper manually."
+  echo "Refusing to package an ad-hoc signed bundle." >&2
+  echo "Rebuild it with a Developer ID in the source repository:" >&2
+  echo "  ./scripts/build_macos_app.sh" >&2
+  exit 1
+fi
+
+if [[ "$signature_info" != *"TeamIdentifier=$EXPECTED_TEAM_ID"* ]]; then
+  echo "Bundle is not signed by team $EXPECTED_TEAM_ID:" >&2
+  echo "$signature_info" | grep -i "TeamIdentifier" >&2 || true
+  exit 1
+fi
+
+# Notarization requires the hardened runtime. Apple rejects a bundle without it
+# after the upload, which wastes several minutes; catch it here instead.
+if [[ "$signature_info" != *"(runtime)"* ]]; then
+  echo "Bundle was signed without the hardened runtime; Apple will reject it." >&2
+  exit 1
+fi
+echo "Signature: Developer ID, team $EXPECTED_TEAM_ID, hardened runtime."
+
+# Notarize and staple the app before it goes into the image, so it keeps
+# opening cleanly after a user drags it out onto a Mac that is offline.
+if [[ "$skip_notarize" -eq 1 ]]; then
+  echo "Skipping app notarization (--skip-notarize); this image is NOT distributable."
+elif xcrun stapler validate "$app_path" >/dev/null 2>&1; then
+  echo "App already carries a stapled ticket; not resubmitting."
 else
-  echo "Note: bundle carries a non-ad-hoc signature."
+  "$repo_root/scripts/notarize.sh" "$app_path"
 fi
 
 staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/slouch-goblin-dmg.XXXXXX")"
@@ -113,8 +154,40 @@ if [[ "$verify_status" -ne 0 ]]; then
   exit 1
 fi
 
+# Sign the disk image itself. Notarizing does not sign anything, and an
+# unsigned image gives Gatekeeper "no usable signature" to evaluate no matter
+# how well the app inside it is signed. This must happen before notarization:
+# signing rewrites the file and would invalidate a ticket issued earlier.
+echo "Signing the disk image"
+codesign --force --timestamp --sign "$SIGN_IDENTITY" "$dmg_path"
+codesign --verify --strict "$dmg_path"
+
+# The disk image is what the user downloads, so it carries the quarantine flag
+# and needs its own ticket. Do this before the checksum: stapling rewrites the
+# file, and a checksum taken earlier would not match what is published.
+if [[ "$skip_notarize" -eq 1 ]]; then
+  echo "Skipping disk image notarization (--skip-notarize)."
+else
+  "$repo_root/scripts/notarize.sh" "$dmg_path"
+
+  # The real test: this is the assessment Gatekeeper performs on a downloaded
+  # image. If it does not pass here, it will not open on anyone else's Mac.
+  echo "Checking Gatekeeper acceptance"
+  # Capture first rather than piping into grep -q: under `set -o pipefail` the
+  # early exit of grep -q can SIGPIPE spctl and fail an image that is fine.
+  assessment="$(spctl -a -vvv -t open --context context:primary-signature "$dmg_path" 2>&1 || true)"
+  echo "$assessment"
+  if [[ "$assessment" != *"accepted"* ]]; then
+    echo "Gatekeeper rejected the notarized disk image; refusing to publish." >&2
+    exit 1
+  fi
+fi
+
 (cd "$repo_root/dist" && shasum -a 256 "$(basename "$dmg_path")" > "$(basename "$dmg_path").sha256")
 
 echo "Packaged: $dmg_path"
 echo "Checksum: $dmg_path.sha256"
 echo "Version:  $version"
+if [[ "$skip_notarize" -eq 0 ]]; then
+  echo "Notarized and stapled; downloads open without a Gatekeeper warning."
+fi
